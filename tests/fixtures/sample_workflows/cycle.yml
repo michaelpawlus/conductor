@@ -1,0 +1,13 @@
+name: has-cycle
+description: Invalid workflow with a dependency cycle
+
+steps:
+  - id: a
+    project: fake-project
+    command: foo
+    depends_on: [b]
+
+  - id: b
+    project: fake-project
+    command: bar
+    depends_on: [a]

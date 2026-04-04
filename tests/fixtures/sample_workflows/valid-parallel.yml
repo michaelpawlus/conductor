@@ -1,0 +1,11 @@
+name: valid-parallel
+description: Two independent steps that run in parallel
+
+steps:
+  - id: step-a
+    project: fake-project
+    command: do-thing
+
+  - id: step-b
+    project: fake-project
+    command: do-other

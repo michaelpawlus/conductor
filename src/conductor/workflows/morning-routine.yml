@@ -1,0 +1,33 @@
+name: morning-routine
+description: Collect context for daily planning
+parallel_default: true
+
+steps:
+  - id: streak
+    project: code-daily
+    command: streak show
+
+  - id: quests
+    project: code-daily
+    command: quests list --status active
+
+  - id: weather
+    project: timebox
+    command: weather
+
+  - id: workout
+    project: workout-app
+    command: ultra today
+
+  - id: companies
+    project: beacon
+    command: companies --limit 5
+
+  - id: briefing
+    project: morning-brief
+    command: --source ai_discourse
+
+  - id: schedule
+    project: timebox
+    command: context
+    depends_on: [weather, workout]

@@ -1,0 +1,19 @@
+name: weekly-retrospective
+description: Aggregate a week of activity for retrospective synthesis
+
+steps:
+  - id: streak-history
+    project: code-daily
+    command: streak history --days 7
+
+  - id: achievements
+    project: code-daily
+    command: achievements list
+
+  - id: diversity
+    project: code-daily
+    command: diversity --days 7
+
+  - id: applications
+    project: beacon
+    command: application list --since 7d

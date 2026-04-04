@@ -1,0 +1,13 @@
+name: valid-sequential
+description: Two steps with a dependency chain
+
+steps:
+  - id: first
+    project: fake-project
+    command: produce-data
+
+  - id: second
+    project: fake-project
+    command: consume-data
+    depends_on: [first]
+    input_from: first

@@ -1,0 +1,12 @@
+name: pre-commit-check
+description: Fast sanity check before pushing
+
+steps:
+  - id: dab-validate
+    project: dab-forge
+    command: validate
+    on_fail: skip
+
+  - id: quick-check
+    project: code-daily
+    command: check quick

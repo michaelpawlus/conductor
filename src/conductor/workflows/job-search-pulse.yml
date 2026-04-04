@@ -1,0 +1,15 @@
+name: job-search-pulse
+description: Surface companies with new openings matching active skill-building quests
+
+steps:
+  - id: companies
+    project: beacon
+    command: companies
+
+  - id: jobs
+    project: beacon
+    command: jobs
+
+  - id: quests
+    project: code-daily
+    command: quests list --status active

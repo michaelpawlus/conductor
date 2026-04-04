@@ -1,0 +1,16 @@
+name: news-and-ideas
+description: Digest news and generate idea candidates for Claude Code synthesis
+
+steps:
+  - id: news
+    project: code-daily
+    command: news digest
+
+  - id: ideas-from-news
+    project: code-daily
+    command: ideas from-news
+    depends_on: [news]
+
+  - id: ideas-from-reddit
+    project: code-daily
+    command: ideas from-reddit
