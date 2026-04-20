@@ -142,7 +142,15 @@ class TestDiscoverProjectsIntegration:
     def test_discover_counts_commands_against_fixture_tree(
         self, tmp_path: Path, monkeypatch
     ):
+        """Wire two on-disk fixture projects through `discover_projects` end to end.
+
+        Each fixture ships a `pyproject.toml` (for `_discover_python`) and a
+        `help.txt` (tracked). The venv wrapper that prints `help.txt` is
+        synthesized here, because `.venv/` is git-ignored and we want the
+        fixture tree to survive a fresh clone.
+        """
         import conductor.registry as registry_mod
+        import shutil
 
         fixtures_src = Path(__file__).parent / "fixtures" / "projects_for_count"
         assert fixtures_src.is_dir(), f"missing fixture dir: {fixtures_src}"
@@ -150,19 +158,34 @@ class TestDiscoverProjectsIntegration:
         projects_dir = tmp_path / "projects"
         projects_dir.mkdir()
 
-        # Copy each fixture project to an isolated PROJECTS_DIR so discovery
-        # runs against a known tree (not ~/projects).
-        import shutil
-
         for child in fixtures_src.iterdir():
-            if child.is_dir():
-                shutil.copytree(child, projects_dir / child.name)
+            if not child.is_dir():
+                continue
+            dst = projects_dir / child.name
+            shutil.copytree(child, dst)
+
+            help_file = dst / "help.txt"
+            assert help_file.exists(), f"fixture {child.name} missing help.txt"
+            cli_name = child.name  # matches [project.scripts] key
+            bin_dir = dst / ".venv" / "bin"
+            bin_dir.mkdir(parents=True)
+            wrapper = bin_dir / cli_name
+            wrapper.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                f"HELP = Path(__file__).resolve().parents[2] / 'help.txt'\n"
+                "if len(sys.argv) > 1 and sys.argv[1] == '--help':\n"
+                "    sys.stdout.write(HELP.read_text())\n"
+                "    sys.exit(0)\n"
+                "sys.exit(2)\n"
+            )
+            wrapper.chmod(0o755)
 
         monkeypatch.setattr(registry_mod, "PROJECTS_DIR", projects_dir)
 
         discovered = discover_projects()
 
-        # Both fixture CLIs should appear with their declared command counts.
         assert "three-cmd" in discovered
         assert "five-cmd" in discovered
         assert discovered["three-cmd"]["commands_discovered"] == 3

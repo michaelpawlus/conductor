@@ -1,0 +1,13 @@
+Usage: five-cmd [OPTIONS] COMMAND [ARGS]...
+
+  A fixture CLI with five subcommands.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  one    First
+  two    Second
+  three  Third
+  four   Fourth
+  five   Fifth

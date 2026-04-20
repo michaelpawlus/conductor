@@ -1,0 +1,13 @@
+
+ Usage: three-cmd [OPTIONS] COMMAND [ARGS]...
+
+ A fixture CLI with three subcommands.
+
+╭─ Options ────────────────────────────────────────────────╮
+│ --help  Show this message and exit.                      │
+╰──────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────╮
+│ alpha   First command                                    │
+│ beta    Second command                                   │
+│ gamma   Third command                                    │
+╰──────────────────────────────────────────────────────────╯
