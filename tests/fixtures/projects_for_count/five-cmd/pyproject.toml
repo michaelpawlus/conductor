@@ -1,0 +1,6 @@
+[project]
+name = "five-cmd"
+version = "0.0.1"
+
+[project.scripts]
+five-cmd = "five_cmd:main"

@@ -123,6 +123,52 @@ def print_workflows(workflows: list[dict[str, Any]], console: Console) -> None:
     console.print(table)
 
 
+def print_doctor(report: dict[str, Any], console: Console) -> None:
+    """Print a doctor report as a compact grouped listing (errors, warnings, ok)."""
+    summary = report.get("summary", {})
+    total = summary.get("projects", 0)
+    console.print(f"\n[bold]conductor doctor[/bold] — {total} projects checked\n")
+
+    projects = report.get("projects", [])
+    errors = [p for p in projects if p["status"] == "error"]
+    warnings = [p for p in projects if p["status"] == "warning"]
+    oks = [p for p in projects if p["status"] == "ok"]
+
+    if errors:
+        console.print(f"[red bold]ERROR[/red bold] ({len(errors)})")
+        for p in errors:
+            for c in p["checks"]:
+                if c["status"] == "error":
+                    console.print(
+                        f"  {p['name']:<16} {c['id']}: {c.get('detail', '')}"
+                    )
+        console.print("")
+
+    if warnings:
+        console.print(f"[yellow bold]WARNING[/yellow bold] ({len(warnings)})")
+        for p in warnings:
+            for c in p["checks"]:
+                if c["status"] == "warning":
+                    detail = c.get("detail", "")
+                    if c["id"] == "commands-discovered":
+                        detail = (
+                            f"live={c.get('live_count', '?')}, "
+                            f"registry={c.get('registry_count', '?')} ({detail})"
+                        )
+                    console.print(f"  {p['name']:<16} {c['id']}: {detail}")
+        console.print("")
+
+    if oks:
+        console.print(f"[green bold]OK[/green bold] ({len(oks)})")
+        names = ", ".join(p["name"] for p in oks)
+        console.print(f"  {names}")
+        console.print("")
+
+    removed = report.get("removed")
+    if removed:
+        console.print(f"[dim]Removed stale entries:[/dim] {', '.join(removed)}")
+
+
 def print_history(runs: list[dict[str, Any]], console: Console) -> None:
     """Print run history as a human-readable table."""
     if not runs:

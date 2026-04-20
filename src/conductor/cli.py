@@ -8,9 +8,11 @@ import typer
 from rich.console import Console
 
 from . import __version__
+from .doctor import run_doctor
 from .executor import execute_single, execute_workflow
 from .history import get_history, get_run
 from .output import (
+    print_doctor,
     print_error,
     print_history,
     print_json,
@@ -18,7 +20,12 @@ from .output import (
     print_run_result,
     print_workflows,
 )
-from .registry import discover_projects, load_registry, save_registry
+from .registry import (
+    REGISTRY_PATH,
+    discover_projects,
+    load_registry,
+    save_registry,
+)
 from .workflow import (
     list_workflows,
     load_workflow,
@@ -238,6 +245,64 @@ def validate(
 
 
 # --- history ---
+
+
+@app.command()
+def doctor(
+    json_output: JsonFlag = False,
+    project: Annotated[
+        str | None,
+        typer.Option("--project", help="Restrict checks to a single registered project"),
+    ] = None,
+    check_json: Annotated[
+        bool,
+        typer.Option("--check-json", help="Also probe whether CLI advertises --json"),
+    ] = False,
+    fix: Annotated[
+        bool,
+        typer.Option("--fix", help="Drop registry entries whose path no longer exists"),
+    ] = False,
+) -> None:
+    """Re-validate the registry and surface CLIs that need attention."""
+    if not REGISTRY_PATH.exists():
+        print_error(
+            f"Registry not found at {REGISTRY_PATH}. Run 'conductor discover' first.",
+            2,
+            json_output,
+            err,
+        )
+        raise typer.Exit(code=2)
+
+    registry = load_registry()
+    report = run_doctor(registry, project_filter=project, check_json=check_json)
+
+    removed: list[str] = []
+    if fix:
+        new_registry = dict(registry)
+        for p in report["projects"]:
+            for c in p["checks"]:
+                if c["id"] == "path-exists" and c["status"] == "error":
+                    if p["name"] in new_registry:
+                        new_registry.pop(p["name"])
+                        removed.append(p["name"])
+                    break
+        if removed:
+            save_registry(new_registry)
+        report["removed"] = removed
+
+    if json_output:
+        print_json(report)
+    else:
+        print_doctor(report, err)
+
+    # After --fix, remaining errors are only those not resolved by removal.
+    remaining_errors = sum(
+        1
+        for p in report["projects"]
+        if p["status"] == "error" and p["name"] not in removed
+    )
+    if remaining_errors > 0:
+        raise typer.Exit(code=1)
 
 
 @app.command()

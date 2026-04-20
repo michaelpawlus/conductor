@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from conductor.registry import get_cli_command
+from conductor.registry import (
+    _parse_command_count,
+    discover_projects,
+    get_cli_command,
+)
 
 
 class TestGetCliCommand:
@@ -58,3 +62,108 @@ class TestGetCliCommand:
         cmd, cwd = get_cli_command(project)
         assert cmd == ["my-tool"]
         assert cwd == tmp_path
+
+
+RICH_BOX_HELP = """
+ Usage: conductor [OPTIONS] COMMAND [ARGS]...
+
+ Compose project CLIs into declarative, chainable agent workflows.
+
+╭─ Options ────────────────────────────────────────────────────────────────╮
+│ --version                                                                │
+│ --help                        Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────╮
+│ discover   Auto-discover CLIs in ~/projects/ and update the registry.    │
+│ list       List registered project CLIs and their commands.              │
+│ run        Run a named or inline workflow.                               │
+│ exec       Run a single project command with conductor wrapping.         │
+│ workflows  List available workflow definitions.                          │
+│ validate   Validate a workflow definition without running it.            │
+│ history    Show recent workflow runs and outcomes.                       │
+╰──────────────────────────────────────────────────────────────────────────╯
+"""
+
+PLAIN_CLICK_HELP = """Usage: foo [OPTIONS] COMMAND [ARGS]...
+
+  A tool.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  foo  do foo
+  bar  do bar
+  baz  do baz
+"""
+
+
+class TestParseCommandCount:
+    def test_rich_box_commands_counted(self):
+        assert _parse_command_count(RICH_BOX_HELP) == 7
+
+    def test_plain_click_commands_counted(self):
+        assert _parse_command_count(PLAIN_CLICK_HELP) == 3
+
+    def test_no_commands_section_returns_zero(self):
+        assert _parse_command_count("Usage: foo [OPTIONS]\n") == 0
+
+    def test_usage_line_does_not_trigger_commands_mode(self):
+        text = "Usage: foo [OPTIONS]\n\nOptions:\n  --help  show help\n"
+        assert _parse_command_count(text) == 0
+
+    def test_options_only_not_counted_as_commands(self):
+        # The Options box precedes Commands in Rich output; the parser must
+        # skip it instead of counting its rows.
+        assert _parse_command_count(RICH_BOX_HELP) == 7
+
+    def test_empty_text_returns_zero(self):
+        assert _parse_command_count("") == 0
+
+    def test_rich_box_with_empty_commands_body_returns_zero(self):
+        text = (
+            "╭─ Commands ─╮\n"
+            "╰────────────╯\n"
+        )
+        assert _parse_command_count(text) == 0
+
+    def test_plain_click_two_commands(self):
+        text = "Commands:\n  foo  do foo\n  bar  do bar\n"
+        assert _parse_command_count(text) == 2
+
+    def test_cap_exceeded_returns_zero(self):
+        # Construct a synthetic Rich box with 300 command rows.
+        rows = "\n".join(f"│ cmd{i}  desc │" for i in range(300))
+        text = f"╭─ Commands ─╮\n{rows}\n╰────────────╯\n"
+        assert _parse_command_count(text) == 0
+
+
+class TestDiscoverProjectsIntegration:
+    def test_discover_counts_commands_against_fixture_tree(
+        self, tmp_path: Path, monkeypatch
+    ):
+        import conductor.registry as registry_mod
+
+        fixtures_src = Path(__file__).parent / "fixtures" / "projects_for_count"
+        assert fixtures_src.is_dir(), f"missing fixture dir: {fixtures_src}"
+
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
+
+        # Copy each fixture project to an isolated PROJECTS_DIR so discovery
+        # runs against a known tree (not ~/projects).
+        import shutil
+
+        for child in fixtures_src.iterdir():
+            if child.is_dir():
+                shutil.copytree(child, projects_dir / child.name)
+
+        monkeypatch.setattr(registry_mod, "PROJECTS_DIR", projects_dir)
+
+        discovered = discover_projects()
+
+        # Both fixture CLIs should appear with their declared command counts.
+        assert "three-cmd" in discovered
+        assert "five-cmd" in discovered
+        assert discovered["three-cmd"]["commands_discovered"] == 3
+        assert discovered["five-cmd"]["commands_discovered"] == 5

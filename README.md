@@ -56,10 +56,13 @@ conductor run morning-routine --json
 | `conductor exec <project> <cmd>` | Run a single project command with conductor wrapping |
 | `conductor workflows` | List available workflow definitions |
 | `conductor validate <workflow>` | Validate a workflow definition without running it |
+| `conductor doctor` | Re-validate the registry and surface broken or stale CLIs |
 | `conductor history` | Show recent workflow runs and outcomes |
 | `conductor history --id <N>` | Show the full result of a specific run |
 
 All commands support `--json`. Human output goes to stderr, JSON to stdout.
+
+`conductor doctor` re-validates every registered project without mutating the registry: it confirms each path still exists, each CLI resolves and responds to `--help`, and the stored `commands_discovered` count still matches live output. Flags include `--project NAME` to narrow scope, `--check-json` to probe whether a CLI advertises a top-level `--json` flag, and `--fix` to drop registry entries whose paths have disappeared. Exits `0` on clean/warning-only, `1` when any project errors, `2` when the registry file is missing.
 
 ## Workflow Format
 

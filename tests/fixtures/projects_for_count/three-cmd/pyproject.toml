@@ -1,0 +1,6 @@
+[project]
+name = "three-cmd"
+version = "0.0.1"
+
+[project.scripts]
+three-cmd = "three_cmd:main"

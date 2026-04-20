@@ -31,6 +31,9 @@ conductor run --inline <yaml>  # Run inline YAML
 conductor exec <project> <cmd> # Run single command with wrapping
 conductor workflows [--json]   # List available workflows
 conductor validate <workflow>  # Validate without running
+conductor doctor [--json] [--project NAME] [--check-json] [--fix]
+                              # Re-validate registry; flags broken/stale CLIs.
+                              # Read-only by default; --fix drops stale paths.
 conductor history [--json]     # Show recent runs
 conductor history --id <N>     # Show full result of a specific run
 ```

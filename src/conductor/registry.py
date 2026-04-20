@@ -1,12 +1,20 @@
 """Project discovery and registry management."""
 
 import json
+import os
+import re
 import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+_MAX_COMMANDS = 200
+_HELP_ENV = {"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}
+_RICH_COMMANDS_HEADER = re.compile(r"^[╭─\s]*Commands?\s*[─╮\s]*$")
+_PLAIN_COMMANDS_HEADER = re.compile(r"^\s*Commands?:\s*$")
+_RICH_BOX_END = re.compile(r"^[╰─\s]*[╯╰].*$")
 
 PROJECTS_DIR = Path.home() / "projects"
 CONDUCTOR_DIR = Path.home() / ".conductor"
@@ -144,8 +152,8 @@ def _discover_node(project_dir: Path, package_json: Path) -> dict[str, Any] | No
     }
 
 
-def _count_commands(project_dir: Path, cli_cmd: str) -> int:
-    """Count CLI commands by parsing --help output."""
+def _capture_help(project_dir: Path, cli_cmd: str) -> str | None:
+    """Run `<cli> --help` and return stdout, or None on failure."""
     try:
         result = subprocess.run(
             cli_cmd.split() + ["--help"],
@@ -153,29 +161,99 @@ def _count_commands(project_dir: Path, cli_cmd: str) -> int:
             text=True,
             timeout=10,
             cwd=str(project_dir),
+            env={**os.environ, **_HELP_ENV},
         )
-        if result.returncode != 0:
-            return 0
+    except (
+        subprocess.TimeoutExpired,
+        subprocess.SubprocessError,
+        FileNotFoundError,
+        OSError,
+    ):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
-        # Count lines in the Commands section (Typer/Click convention)
-        lines = result.stdout.split("\n")
-        in_commands = False
-        count = 0
-        for line in lines:
-            stripped = line.strip().lower()
-            if stripped.startswith("commands") or stripped.startswith("usage"):
-                in_commands = True
-                continue
-            if in_commands and line and not line[0].isspace():
-                in_commands = False
-            if in_commands and line.strip():
-                # Lines with a command name followed by description
-                parts = line.strip().split()
-                if parts and parts[0].isidentifier():
-                    count += 1
-        return max(count, 1)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+
+def _parse_command_count(help_text: str) -> int:
+    """Parse a Typer/Click `--help` capture and return the subcommand count.
+
+    Recognizes both the Rich box format ("╭─ Commands ─╮ / │ name ... │ / ╰─╯")
+    and the plain Click format ("Commands:\\n  name  description\\n"). Returns
+    0 when no Commands section is found; caps at _MAX_COMMANDS to avoid poisoning
+    the registry with runaway parser output.
+    """
+    lines = help_text.split("\n")
+    count = _count_rich_box(lines)
+    if count == 0:
+        count = _count_plain_click(lines)
+    if count > _MAX_COMMANDS:
         return 0
+    return count
+
+
+def _count_rich_box(lines: list[str]) -> int:
+    count = 0
+    i = 0
+    while i < len(lines):
+        if _RICH_COMMANDS_HEADER.match(lines[i]):
+            i += 1
+            while i < len(lines):
+                line = lines[i]
+                stripped = line.strip()
+                if not stripped:
+                    i += 1
+                    continue
+                # Box close: starts with ╰ or ╯ (possibly after stripping leading dashes)
+                if stripped[0] in "╰╯" or _RICH_BOX_END.match(line):
+                    break
+                if stripped.startswith("│"):
+                    inner = stripped.lstrip("│").strip()
+                    if inner:
+                        name = inner.split()[0]
+                        if name.replace("-", "_").replace(":", "_").isidentifier() or _looks_like_command(name):
+                            count += 1
+                i += 1
+            return count
+        i += 1
+    return count
+
+
+def _count_plain_click(lines: list[str]) -> int:
+    count = 0
+    in_commands = False
+    for line in lines:
+        if _PLAIN_COMMANDS_HEADER.match(line):
+            in_commands = True
+            continue
+        if in_commands:
+            if not line.strip():
+                # Blank line ends the section
+                break
+            if not line[0].isspace():
+                # Non-indented line ends the section
+                break
+            parts = line.strip().split()
+            if parts:
+                name = parts[0]
+                if _looks_like_command(name):
+                    count += 1
+    return count
+
+
+def _looks_like_command(token: str) -> bool:
+    """Return True if `token` resembles a CLI command name (letters, digits, - _ :)."""
+    if not token:
+        return False
+    return all(c.isalnum() or c in "-_:" for c in token) and not token[0].isdigit()
+
+
+def _count_commands(project_dir: Path, cli_cmd: str) -> int:
+    """Count CLI commands by parsing --help output."""
+    help_text = _capture_help(project_dir, cli_cmd)
+    if help_text is None:
+        return 0
+    return _parse_command_count(help_text)
 
 
 def load_registry() -> dict[str, dict[str, Any]]:
