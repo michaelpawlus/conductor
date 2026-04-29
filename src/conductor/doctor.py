@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,7 @@ from .registry import (
 )
 
 _HELP_TIMEOUT = 10
+_AUDIT_TIMEOUT = 30
 
 
 def run_doctor(
@@ -23,6 +26,7 @@ def run_doctor(
     *,
     project_filter: str | None = None,
     check_json: bool = False,
+    check_subcommands: bool = False,
 ) -> dict[str, Any]:
     """Run per-project health checks and return a structured report.
 
@@ -36,8 +40,20 @@ def run_doctor(
     if project_filter is not None:
         items = [(name, entry) for name, entry in items if name == project_filter]
 
+    typer_duo_path: str | None = None
+    typer_duo_missing = False
+    if check_subcommands:
+        typer_duo_path = shutil.which("typer-duo")
+        typer_duo_missing = typer_duo_path is None
+
     for name, entry in sorted(items):
-        project_report = _check_project(name, entry, check_json=check_json)
+        project_report = _check_project(
+            name,
+            entry,
+            check_json=check_json,
+            check_subcommands=check_subcommands,
+            typer_duo_path=typer_duo_path,
+        )
         reports.append(project_report)
         status = project_report["status"]
         summary["projects"] += 1
@@ -48,7 +64,7 @@ def run_doctor(
         else:
             summary["ok"] += 1
 
-    return {
+    report: dict[str, Any] = {
         "checked_at": datetime.now(timezone.utc)
         .replace(microsecond=0)
         .isoformat()
@@ -57,10 +73,22 @@ def run_doctor(
         "summary": summary,
         "projects": reports,
     }
+    if check_subcommands:
+        report["typer_duo_available"] = not typer_duo_missing
+        if typer_duo_missing:
+            report["typer_duo_error"] = (
+                "typer-duo not found on PATH; install typer-duo to enable --check-subcommands"
+            )
+    return report
 
 
 def _check_project(
-    name: str, entry: dict[str, Any], *, check_json: bool
+    name: str,
+    entry: dict[str, Any],
+    *,
+    check_json: bool,
+    check_subcommands: bool = False,
+    typer_duo_path: str | None = None,
 ) -> dict[str, Any]:
     """Run all checks for a single registry entry."""
     checks: list[dict[str, Any]] = []
@@ -72,6 +100,14 @@ def _check_project(
     if path_check["status"] != "ok":
         checks.append({"id": "cli-resolves", "status": "skipped", "detail": "path-exists failed"})
         checks.append({"id": "help-parses", "status": "skipped", "detail": "path-exists failed"})
+        if check_subcommands:
+            checks.append(
+                {
+                    "id": "subcommands-audit",
+                    "status": "skipped",
+                    "detail": "path-exists failed",
+                }
+            )
     else:
         cli_check, cmd_parts, cwd = _check_cli_resolves(project)
         checks.append(cli_check)
@@ -90,6 +126,9 @@ def _check_project(
 
         if check_json:
             checks.append(_check_json_flag(help_text))
+
+        if check_subcommands:
+            checks.append(_check_subcommands_audit(entry, typer_duo_path))
 
     venv_check = _check_venv_present(entry)
     if venv_check is not None:
@@ -243,6 +282,93 @@ def _check_json_flag(help_text: str | None) -> dict[str, Any]:
         "id": "json-flag-advertised",
         "status": "info",
         "detail": "top-level --help does not advertise --json",
+    }
+
+
+def _check_subcommands_audit(
+    entry: dict[str, Any], typer_duo_path: str | None
+) -> dict[str, Any]:
+    """Run `typer-duo audit <path> --json` and roll the result into a check."""
+    if typer_duo_path is None:
+        return {
+            "id": "subcommands-audit",
+            "status": "skipped",
+            "detail": "typer-duo not found on PATH",
+        }
+
+    path = entry.get("path")
+    if not path:
+        return {
+            "id": "subcommands-audit",
+            "status": "skipped",
+            "detail": "registry entry has no path",
+        }
+
+    if entry.get("runtime") == "node":
+        return {
+            "id": "subcommands-audit",
+            "status": "skipped",
+            "detail": "node runtime — typer-duo is python-only",
+        }
+
+    try:
+        result = subprocess.run(
+            [typer_duo_path, "audit", path, "--json"],
+            capture_output=True,
+            text=True,
+            timeout=_AUDIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "id": "subcommands-audit",
+            "status": "warning",
+            "detail": f"typer-duo audit did not return within {_AUDIT_TIMEOUT}s",
+        }
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+        return {"id": "subcommands-audit", "status": "error", "detail": str(exc)}
+
+    raw = result.stdout.strip()
+    if not raw:
+        detail = result.stderr.strip() or "typer-duo audit produced no output"
+        return {"id": "subcommands-audit", "status": "error", "detail": detail}
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {
+            "id": "subcommands-audit",
+            "status": "error",
+            "detail": f"could not parse typer-duo output: {exc}",
+        }
+
+    if "error" in payload and "summary" not in payload:
+        return {
+            "id": "subcommands-audit",
+            "status": "info",
+            "detail": str(payload.get("error")),
+        }
+
+    summary = payload.get("summary") or {}
+    findings = payload.get("findings") or []
+    severity_max = summary.get("severity_max")
+
+    if severity_max == "error":
+        status = "error"
+    elif severity_max == "warning":
+        status = "warning"
+    elif findings:
+        status = "info"
+    else:
+        status = "ok"
+
+    return {
+        "id": "subcommands-audit",
+        "status": status,
+        "score": summary.get("score"),
+        "commands_total": summary.get("commands_total"),
+        "commands_with_json": summary.get("commands_with_json"),
+        "findings_count": len(findings),
+        "severity_max": severity_max,
     }
 
 

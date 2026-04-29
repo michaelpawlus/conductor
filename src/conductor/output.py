@@ -123,11 +123,32 @@ def print_workflows(workflows: list[dict[str, Any]], console: Console) -> None:
     console.print(table)
 
 
+def _format_check_detail(check: dict[str, Any]) -> str:
+    detail = check.get("detail", "")
+    cid = check.get("id")
+    if cid == "commands-discovered":
+        return (
+            f"live={check.get('live_count', '?')}, "
+            f"registry={check.get('registry_count', '?')} ({detail})"
+        )
+    if cid == "subcommands-audit":
+        score = check.get("score")
+        findings = check.get("findings_count")
+        if score is not None and findings is not None:
+            return f"score={score}, findings={findings} ({check.get('severity_max', '?')})"
+    return detail
+
+
 def print_doctor(report: dict[str, Any], console: Console) -> None:
     """Print a doctor report as a compact grouped listing (errors, warnings, ok)."""
     summary = report.get("summary", {})
     total = summary.get("projects", 0)
     console.print(f"\n[bold]conductor doctor[/bold] — {total} projects checked\n")
+
+    if report.get("typer_duo_available") is False:
+        console.print(
+            f"[red]Error:[/red] {report.get('typer_duo_error', 'typer-duo missing')}\n"
+        )
 
     projects = report.get("projects", [])
     errors = [p for p in projects if p["status"] == "error"]
@@ -140,7 +161,7 @@ def print_doctor(report: dict[str, Any], console: Console) -> None:
             for c in p["checks"]:
                 if c["status"] == "error":
                     console.print(
-                        f"  {p['name']:<16} {c['id']}: {c.get('detail', '')}"
+                        f"  {p['name']:<16} {c['id']}: {_format_check_detail(c)}"
                     )
         console.print("")
 
@@ -149,19 +170,29 @@ def print_doctor(report: dict[str, Any], console: Console) -> None:
         for p in warnings:
             for c in p["checks"]:
                 if c["status"] == "warning":
-                    detail = c.get("detail", "")
-                    if c["id"] == "commands-discovered":
-                        detail = (
-                            f"live={c.get('live_count', '?')}, "
-                            f"registry={c.get('registry_count', '?')} ({detail})"
-                        )
-                    console.print(f"  {p['name']:<16} {c['id']}: {detail}")
+                    console.print(
+                        f"  {p['name']:<16} {c['id']}: {_format_check_detail(c)}"
+                    )
         console.print("")
 
     if oks:
         console.print(f"[green bold]OK[/green bold] ({len(oks)})")
         names = ", ".join(p["name"] for p in oks)
         console.print(f"  {names}")
+        console.print("")
+
+    audited = [
+        (p, c)
+        for p in projects
+        for c in p["checks"]
+        if c.get("id") == "subcommands-audit" and c.get("score") is not None
+    ]
+    if audited:
+        console.print("[bold]Agent-readiness audit[/bold]")
+        for p, c in audited:
+            console.print(
+                f"  {p['name']:<16} score={c['score']:<3} findings={c.get('findings_count', 0)}"
+            )
         console.print("")
 
     removed = report.get("removed")

@@ -258,6 +258,13 @@ def doctor(
         bool,
         typer.Option("--check-json", help="Also probe whether CLI advertises --json"),
     ] = False,
+    check_subcommands: Annotated[
+        bool,
+        typer.Option(
+            "--check-subcommands",
+            help="Run `typer-duo audit` on each project and report agent-readiness",
+        ),
+    ] = False,
     fix: Annotated[
         bool,
         typer.Option("--fix", help="Drop registry entries whose path no longer exists"),
@@ -274,7 +281,12 @@ def doctor(
         raise typer.Exit(code=2)
 
     registry = load_registry()
-    report = run_doctor(registry, project_filter=project, check_json=check_json)
+    report = run_doctor(
+        registry,
+        project_filter=project,
+        check_json=check_json,
+        check_subcommands=check_subcommands,
+    )
 
     removed: list[str] = []
     if fix:
@@ -301,7 +313,7 @@ def doctor(
         for p in report["projects"]
         if p["status"] == "error" and p["name"] not in removed
     )
-    if remaining_errors > 0:
+    if remaining_errors > 0 or report.get("typer_duo_available") is False:
         raise typer.Exit(code=1)
 
 

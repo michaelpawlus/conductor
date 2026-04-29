@@ -108,6 +108,24 @@ class TestDoctorCLI:
         result = runner.invoke(app, ["doctor", "--json"])
         assert result.exit_code == 2
 
+    def test_doctor_check_subcommands_exits_one_when_typer_duo_missing(
+        self, tmp_path, isolated_conductor, monkeypatch
+    ):
+        proj = tmp_path / "ok"
+        proj.mkdir()
+        entry = _make_fake_cli(proj, cli_name="ok", help_text=RICH_HELP)
+        entry["commands_discovered"] = 2
+        _write_registry(isolated_conductor["registry"], {"ok": entry})
+
+        monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["doctor", "--check-subcommands", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.stdout)
+        assert data["typer_duo_available"] is False
+        assert "typer-duo" in data["typer_duo_error"]
+
     def test_doctor_fix_removes_stale_entries(self, tmp_path, isolated_conductor):
         proj = tmp_path / "alive"
         proj.mkdir()
