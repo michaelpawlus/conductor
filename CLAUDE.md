@@ -37,6 +37,15 @@ conductor doctor [--json] [--project NAME] [--check-json]
                               # Read-only by default; --fix drops stale paths.
                               # --check-subcommands runs `typer-duo audit` on
                               # each project for agent-readiness scoring.
+conductor doctor diff --since FILE [--json] [--project NAME]
+                  [--check-json] [--check-subcommands]
+                              # Diff current registry health vs a prior
+                              # doctor JSON snapshot. Adds a `diff` field
+                              # with regressed/improved/newly_added/removed.
+                              # Exits 0 even on regressions; 1 on unreadable
+                              # or schema-incompatible --since; 2 on missing
+                              # registry. Pairs with `typer-duo audit-all
+                              # --since` for portfolio-readiness diffs.
 conductor history [--json]     # Show recent runs
 conductor history --id <N>     # Show full result of a specific run
 ```

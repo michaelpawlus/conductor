@@ -57,12 +57,17 @@ conductor run morning-routine --json
 | `conductor workflows` | List available workflow definitions |
 | `conductor validate <workflow>` | Validate a workflow definition without running it |
 | `conductor doctor` | Re-validate the registry and surface broken or stale CLIs |
+| `conductor doctor diff --since FILE` | Diff the current registry health against a prior doctor JSON snapshot |
 | `conductor history` | Show recent workflow runs and outcomes |
 | `conductor history --id <N>` | Show the full result of a specific run |
 
 All commands support `--json`. Human output goes to stderr, JSON to stdout.
 
 `conductor doctor` re-validates every registered project without mutating the registry: it confirms each path still exists, each CLI resolves and responds to `--help`, and the stored `commands_discovered` count still matches live output. Flags include `--project NAME` to narrow scope, `--check-json` to probe whether a CLI advertises a top-level `--json` flag, and `--fix` to drop registry entries whose paths have disappeared. Exits `0` on clean/warning-only, `1` when any project errors, `2` when the registry file is missing.
+
+### Portfolio diff
+
+`conductor doctor diff --since FILE` answers "what newly broke since the last run?" by comparing the current doctor checks against a prior JSON snapshot. The output reuses today's doctor payload and adds a `diff` field with `regressed` / `improved` / `newly_added` / `removed` sections. Diff exits `0` regardless of regressions, `1` on an unreadable or schema-incompatible `--since` file, `2` on missing registry. The same `--project`, `--check-json`, and `--check-subcommands` flags carry over so the diff is taken at the same granularity as the baseline. Pair with `typer-duo audit-all --since` so per-project subcommand audits and registry-level health diff at the same baseline.
 
 ## Workflow Format
 

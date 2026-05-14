@@ -20,6 +20,11 @@ from .registry import (
 _HELP_TIMEOUT = 10
 _AUDIT_TIMEOUT = 30
 
+DOCTOR_SCHEMA_VERSION = 1
+
+# Project rollup is one of "ok" / "warning" / "error". Higher rank = worse.
+_STATUS_RANK = {"ok": 0, "warning": 1, "error": 2}
+
 
 def run_doctor(
     registry: dict[str, dict[str, Any]],
@@ -396,3 +401,116 @@ def _rollup(checks: list[dict[str, Any]]) -> str:
         if c["status"] == "warning":
             has_warning = True
     return "warning" if has_warning else "ok"
+
+
+def diff_reports(prev: dict[str, Any], curr: dict[str, Any]) -> dict[str, Any]:
+    """Diff two doctor reports.
+
+    Returns a dict with keys: ``vs_baseline``, ``regressed``, ``improved``,
+    ``newly_added``, ``removed``. Pure function — no I/O.
+
+    Severity is compared by project rollup (``ok`` < ``warning`` < ``error``).
+    Regressions include the first newly-failing check ID when one can be
+    identified. ``vs_baseline`` carries the baseline's ``generated_at`` (or
+    ``checked_at`` for unversioned baselines) for traceability, mirroring
+    ``typer-duo audit-all --since``.
+    """
+    prev_by_name = {p["name"]: p for p in prev.get("projects", [])}
+    curr_by_name = {p["name"]: p for p in curr.get("projects", [])}
+
+    regressed: list[dict[str, Any]] = []
+    improved: list[dict[str, Any]] = []
+
+    for name in sorted(set(prev_by_name) & set(curr_by_name)):
+        prev_p = prev_by_name[name]
+        curr_p = curr_by_name[name]
+        prev_status = prev_p.get("status", "ok")
+        curr_status = curr_p.get("status", "ok")
+        prev_rank = _STATUS_RANK.get(prev_status, 0)
+        curr_rank = _STATUS_RANK.get(curr_status, 0)
+        if curr_rank > prev_rank:
+            entry: dict[str, Any] = {
+                "name": name,
+                "from": prev_status,
+                "to": curr_status,
+            }
+            failed = _first_newly_failed_check(prev_p, curr_p)
+            if failed is not None:
+                entry["failed_check"] = failed
+            regressed.append(entry)
+        elif curr_rank < prev_rank:
+            improved.append(
+                {"name": name, "from": prev_status, "to": curr_status}
+            )
+
+    newly_added = [
+        {"name": n, "status": curr_by_name[n].get("status", "ok")}
+        for n in sorted(set(curr_by_name) - set(prev_by_name))
+    ]
+    removed = [
+        {"name": n, "last_status": prev_by_name[n].get("status", "ok")}
+        for n in sorted(set(prev_by_name) - set(curr_by_name))
+    ]
+
+    return {
+        "vs_baseline": prev.get("generated_at") or prev.get("checked_at"),
+        "regressed": regressed,
+        "improved": improved,
+        "newly_added": newly_added,
+        "removed": removed,
+    }
+
+
+def _first_newly_failed_check(
+    prev_p: dict[str, Any], curr_p: dict[str, Any]
+) -> str | None:
+    """Return the ID of the first check in *curr_p* that wasn't failing in *prev_p*."""
+    prev_checks = {c.get("id"): c for c in prev_p.get("checks", [])}
+    for c in curr_p.get("checks", []):
+        cid = c.get("id")
+        if c.get("status") not in ("warning", "error"):
+            continue
+        prev_c = prev_checks.get(cid)
+        if prev_c is None or prev_c.get("status") not in ("warning", "error"):
+            return cid
+    return None
+
+
+def load_baseline_report(path: Path) -> dict[str, Any]:
+    """Load a prior doctor report from *path* for use as a diff baseline.
+
+    Tolerates both a bare doctor JSON and the output of ``conductor doctor diff``
+    itself (which carries a ``diff`` field) — the ``diff`` field is stripped so
+    callers always see a snapshot.
+
+    Raises ``ValueError`` for unreadable files, malformed JSON, or schema
+    version mismatches. The error message is suitable for piping to stderr.
+    """
+    try:
+        raw = path.read_text()
+    except OSError as exc:
+        raise ValueError(f"cannot read --since file {path}: {exc}") from exc
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--since file {path} is not valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"--since file {path} must be a JSON object")
+
+    version = data.get("schema_version")
+    if version is not None and version != DOCTOR_SCHEMA_VERSION:
+        raise ValueError(
+            f"--since file {path} has schema_version={version!r}; "
+            f"this build expects schema_version={DOCTOR_SCHEMA_VERSION}"
+        )
+
+    if "projects" not in data:
+        raise ValueError(
+            f"--since file {path} is missing required 'projects' field"
+        )
+
+    baseline = dict(data)
+    baseline.pop("diff", None)
+    return baseline

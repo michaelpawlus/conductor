@@ -200,6 +200,55 @@ def print_doctor(report: dict[str, Any], console: Console) -> None:
         console.print(f"[dim]Removed stale entries:[/dim] {', '.join(removed)}")
 
 
+def print_doctor_diff(report: dict[str, Any], console: Console) -> None:
+    """Print a doctor diff report — compact sections, empty ones suppressed."""
+    diff = report.get("diff") or {}
+    baseline = diff.get("vs_baseline") or "?"
+    console.print(
+        f"\n[bold]conductor doctor diff[/bold] — vs baseline at {baseline}\n"
+    )
+
+    sections = [
+        ("regressed", "[red bold]REGRESSED[/red bold]", _format_regressed_row),
+        ("improved", "[green bold]IMPROVED[/green bold]", _format_transition_row),
+        ("newly_added", "[cyan bold]NEWLY ADDED[/cyan bold]", _format_added_row),
+        ("removed", "[dim bold]REMOVED[/dim bold]", _format_removed_row),
+    ]
+
+    any_section = False
+    for key, header, formatter in sections:
+        items = diff.get(key) or []
+        if not items:
+            continue
+        any_section = True
+        console.print(f"{header} ({len(items)})")
+        for item in items:
+            console.print(f"  {formatter(item)}")
+        console.print("")
+
+    if not any_section:
+        console.print("[green]No changes since baseline.[/green]\n")
+
+
+def _format_transition_row(item: dict[str, Any]) -> str:
+    return f"{item['name']:<16} {item.get('from', '?')} → {item.get('to', '?')}"
+
+
+def _format_regressed_row(item: dict[str, Any]) -> str:
+    base = _format_transition_row(item)
+    if "failed_check" in item:
+        return f"{base}  ({item['failed_check']})"
+    return base
+
+
+def _format_added_row(item: dict[str, Any]) -> str:
+    return f"{item['name']:<16} status={item.get('status', '?')}"
+
+
+def _format_removed_row(item: dict[str, Any]) -> str:
+    return f"{item['name']:<16} last_status={item.get('last_status', '?')}"
+
+
 def print_history(runs: list[dict[str, Any]], console: Console) -> None:
     """Print run history as a human-readable table."""
     if not runs:

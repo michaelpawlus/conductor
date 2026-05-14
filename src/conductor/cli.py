@@ -2,17 +2,24 @@
 
 import asyncio
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
 
 from . import __version__
-from .doctor import run_doctor
+from .doctor import (
+    DOCTOR_SCHEMA_VERSION,
+    diff_reports,
+    load_baseline_report,
+    run_doctor,
+)
 from .executor import execute_single, execute_workflow
 from .history import get_history, get_run
 from .output import (
     print_doctor,
+    print_doctor_diff,
     print_error,
     print_history,
     print_json,
@@ -244,11 +251,44 @@ def validate(
         raise typer.Exit(code=1)
 
 
-# --- history ---
+# --- doctor (sub-app: default snapshot + `diff` subcommand) ---
 
 
-@app.command()
+doctor_app = typer.Typer(
+    no_args_is_help=False,
+    help="Re-validate the registry and surface CLIs that need attention.",
+)
+
+
+def _require_registry(json_output: bool) -> None:
+    if not REGISTRY_PATH.exists():
+        print_error(
+            f"Registry not found at {REGISTRY_PATH}. Run 'conductor discover' first.",
+            2,
+            json_output,
+            err,
+        )
+        raise typer.Exit(code=2)
+
+
+def _run_doctor_snapshot(
+    *,
+    project: str | None,
+    check_json: bool,
+    check_subcommands: bool,
+) -> dict:
+    registry = load_registry()
+    return run_doctor(
+        registry,
+        project_filter=project,
+        check_json=check_json,
+        check_subcommands=check_subcommands,
+    )
+
+
+@doctor_app.callback(invoke_without_command=True)
 def doctor(
+    ctx: typer.Context,
     json_output: JsonFlag = False,
     project: Annotated[
         str | None,
@@ -271,15 +311,12 @@ def doctor(
     ] = False,
 ) -> None:
     """Re-validate the registry and surface CLIs that need attention."""
-    if not REGISTRY_PATH.exists():
-        print_error(
-            f"Registry not found at {REGISTRY_PATH}. Run 'conductor discover' first.",
-            2,
-            json_output,
-            err,
-        )
-        raise typer.Exit(code=2)
+    # When a subcommand (e.g. `doctor diff`) is invoked, defer to it; the
+    # subcommand carries its own option set.
+    if ctx.invoked_subcommand is not None:
+        return
 
+    _require_registry(json_output)
     registry = load_registry()
     report = run_doctor(
         registry,
@@ -315,6 +352,67 @@ def doctor(
     )
     if remaining_errors > 0 or report.get("typer_duo_available") is False:
         raise typer.Exit(code=1)
+
+
+@doctor_app.command("diff")
+def doctor_diff(
+    since: Annotated[
+        Path,
+        typer.Option(
+            "--since",
+            help="Path to a prior doctor JSON report to diff the current run against",
+        ),
+    ],
+    json_output: JsonFlag = False,
+    project: Annotated[
+        str | None,
+        typer.Option("--project", help="Restrict checks to a single registered project"),
+    ] = None,
+    check_json: Annotated[
+        bool,
+        typer.Option("--check-json", help="Also probe whether CLI advertises --json"),
+    ] = False,
+    check_subcommands: Annotated[
+        bool,
+        typer.Option(
+            "--check-subcommands",
+            help="Run `typer-duo audit` on each project and report agent-readiness",
+        ),
+    ] = False,
+) -> None:
+    """Diff the current registry health against a prior doctor JSON snapshot."""
+    try:
+        baseline = load_baseline_report(since)
+    except ValueError as exc:
+        print_error(str(exc), 1, json_output, err)
+        raise typer.Exit(code=1)
+
+    _require_registry(json_output)
+    current = _run_doctor_snapshot(
+        project=project,
+        check_json=check_json,
+        check_subcommands=check_subcommands,
+    )
+
+    diff = diff_reports(baseline, current)
+
+    envelope = {
+        "schema_version": DOCTOR_SCHEMA_VERSION,
+        "generated_at": current["checked_at"],
+        **current,
+        "diff": diff,
+    }
+
+    if json_output:
+        print_json(envelope)
+    else:
+        print_doctor_diff(envelope, err)
+
+
+app.add_typer(doctor_app, name="doctor")
+
+
+# --- history ---
 
 
 @app.command()
