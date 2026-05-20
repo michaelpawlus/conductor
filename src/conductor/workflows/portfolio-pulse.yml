@@ -1,0 +1,20 @@
+name: portfolio-pulse
+description: Cross-tool snapshot of portfolio readiness — agent-readiness, activity, shippability, and CLI ergonomics — in one run.
+parallel_default: true
+
+steps:
+  - id: agent-readiness
+    project: agent-ready
+    command: score . --root ~/projects
+
+  - id: activity
+    project: portfolio-audit
+    command: list
+
+  - id: shippability
+    project: code-daily
+    command: launchpad sweep
+
+  - id: cli-ergonomics
+    project: typer-duo
+    command: audit-all --root ~/projects

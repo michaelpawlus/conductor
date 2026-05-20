@@ -125,6 +125,7 @@ steps:
 | `job-search-pulse` | Surface companies with openings matching active quests |
 | `weekly-retrospective` | Aggregate a week of coding activity and job search data |
 | `pre-commit-check` | Fast sanity check before pushing |
+| `portfolio-pulse` | Snapshot portfolio readiness across agent-ready, portfolio-audit, code-daily, and typer-duo |
 
 ## Output Format
 
