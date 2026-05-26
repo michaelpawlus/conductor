@@ -25,6 +25,7 @@ from .output import (
     print_json,
     print_registry,
     print_run_result,
+    print_sweep,
     print_workflows,
 )
 from .registry import (
@@ -33,6 +34,7 @@ from .registry import (
     load_registry,
     save_registry,
 )
+from .sweep import DEFAULT_PARALLEL, FILTER_MODES, run_sweep
 from .workflow import (
     list_workflows,
     load_workflow,
@@ -194,6 +196,112 @@ def exec_cmd(
             err.print(f"  [red]{result['error']}[/red]")
         if result.get("output"):
             err.print_json(data=result["output"])
+
+
+# --- sweep ---
+
+
+@app.command()
+def sweep(
+    command: Annotated[
+        list[str],
+        typer.Argument(
+            help=(
+                "Subcommand to fan across the registry. Quote it as one string "
+                "(e.g. \"doctor --json\") or pass after `--` to forward flags "
+                "verbatim (e.g. `sweep -- doctor --json`)."
+            ),
+        ),
+    ],
+    filter_mode: Annotated[
+        str,
+        typer.Option(
+            "--filter",
+            help=(
+                "has-command (default): only projects whose CLI lists the head "
+                "subcommand. has-cli: every registered project. all: alias for "
+                "has-cli."
+            ),
+        ),
+    ] = "has-command",
+    parallel: Annotated[
+        int,
+        typer.Option("--parallel", help="Max concurrent project dispatches"),
+    ] = DEFAULT_PARALLEL,
+    fail_fast: Annotated[
+        bool,
+        typer.Option(
+            "--fail-fast",
+            help="Stop the sweep on the first project failure (default: continue)",
+        ),
+    ] = False,
+    continue_on_error: Annotated[
+        bool,
+        typer.Option(
+            "--continue-on-error/--no-continue-on-error",
+            help="Keep going past per-project failures (default: on)",
+        ),
+    ] = True,
+    json_output: JsonFlag = False,
+) -> None:
+    """Fan a single subcommand across every registered project."""
+    if not command:
+        print_error("Provide a command to sweep", 1, json_output, err)
+        raise typer.Exit(code=1)
+
+    if filter_mode not in FILTER_MODES:
+        print_error(
+            f"--filter must be one of {', '.join(FILTER_MODES)}",
+            1,
+            json_output,
+            err,
+        )
+        raise typer.Exit(code=1)
+
+    registry = load_registry()
+    if not registry:
+        print_error(
+            "Registry is empty. Run 'conductor discover' first.",
+            2,
+            json_output,
+            err,
+        )
+        raise typer.Exit(code=2)
+
+    # fail-fast inverts continue-on-error if explicitly set.
+    keep_going = continue_on_error and not fail_fast
+
+    cmd_str = " ".join(command)
+
+    if not json_output:
+        err.print(
+            f"Sweeping [bold]{cmd_str}[/bold] across "
+            f"{len(registry)} project(s) — filter={filter_mode}, parallel={parallel}"
+        )
+
+    def _stderr_cb(project_id: str, text: str) -> None:
+        if not json_output:
+            for line in text.splitlines():
+                err.print(f"  [{project_id}] {line}", style="dim")
+
+    result = asyncio.run(
+        run_sweep(
+            cmd_str,
+            registry,
+            filter_mode=filter_mode,
+            parallel=parallel,
+            continue_on_error=keep_going,
+            stderr_callback=_stderr_cb,
+        )
+    )
+
+    if json_output:
+        print_json(result)
+    else:
+        print_sweep(result, err)
+
+    if not keep_going and result["summary"].get("failed", 0) > 0:
+        raise typer.Exit(code=1)
 
 
 # --- workflows ---

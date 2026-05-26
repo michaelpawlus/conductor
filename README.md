@@ -54,6 +54,7 @@ conductor run morning-routine --json
 | `conductor run <workflow>` | Run a named workflow (from `~/.conductor/workflows/` or built-ins) |
 | `conductor run --inline <yaml>` | Run an inline YAML workflow definition |
 | `conductor exec <project> <cmd>` | Run a single project command with conductor wrapping |
+| `conductor sweep <command>` | Fan one subcommand across every registered project and merge the JSON |
 | `conductor workflows` | List available workflow definitions |
 | `conductor validate <workflow>` | Validate a workflow definition without running it |
 | `conductor doctor` | Re-validate the registry and surface broken or stale CLIs |
@@ -64,6 +65,29 @@ conductor run morning-routine --json
 All commands support `--json`. Human output goes to stderr, JSON to stdout.
 
 `conductor doctor` re-validates every registered project without mutating the registry: it confirms each path still exists, each CLI resolves and responds to `--help`, and the stored `commands_discovered` count still matches live output. Flags include `--project NAME` to narrow scope, `--check-json` to probe whether a CLI advertises a top-level `--json` flag, and `--fix` to drop registry entries whose paths have disappeared. Exits `0` on clean/warning-only, `1` when any project errors, `2` when the registry file is missing.
+
+### Sweep — fan a subcommand across the registry
+
+`conductor sweep` is the cross-project composition primitive: it dispatches the same subcommand against every registered project, gathers each project's JSON result, and merges them into one envelope. Use it instead of writing a workflow YAML for "one command, many projects" surveys.
+
+```bash
+# Each project's doctor report in one envelope
+conductor sweep -- doctor --json --filter has-command --json
+
+# Run a survey against everything that even has a CLI, with concurrency 4
+conductor sweep -- status --json --filter has-cli --parallel 4 --json
+
+# Quote the command instead of using `--`
+conductor sweep "audit --json" --filter has-cli --json
+```
+
+Filters:
+
+- `--filter has-command` (default): probe each project's `--help` and dispatch only to those that list the head subcommand. Skipped projects appear in the result with `status="skipped"`.
+- `--filter has-cli`: dispatch to every registered project; let projects that don't implement the subcommand fail with their own exit code.
+- `--filter all`: alias for `has-cli`.
+
+Failure semantics: `--continue-on-error` is on by default (sweeps are surveys); pass `--fail-fast` to abort on the first failure. Exits `0` on full success or contained partial failure, `1` on `--fail-fast` triggered failures, `2` on missing/empty registry. Every sweep is recorded to `~/.conductor/history.db` with `workflow="_sweep:<command>"`, so `conductor history` covers them alongside named workflows.
 
 ### Portfolio diff
 

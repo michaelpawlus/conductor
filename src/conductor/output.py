@@ -249,6 +249,69 @@ def _format_removed_row(item: dict[str, Any]) -> str:
     return f"{item['name']:<16} last_status={item.get('last_status', '?')}"
 
 
+def print_sweep(result: dict[str, Any], console: Console) -> None:
+    """Print a sweep result as a one-row-per-project table."""
+    status = result.get("status", "?")
+    if status == "completed":
+        style = "green"
+    elif status == "partial":
+        style = "yellow"
+    else:
+        style = "red"
+
+    console.print(
+        f"\n[bold]Sweep:[/bold]    {result.get('command', '?')}"
+    )
+    console.print(f"[bold]Status:[/bold]   [{style}]{status}[/{style}]")
+    console.print(f"[bold]Duration:[/bold] {result.get('duration_seconds', 0)}s")
+    console.print(
+        f"[bold]Filter:[/bold]   {result.get('filter', '?')}    "
+        f"[bold]Parallel:[/bold] {result.get('parallel', '?')}\n"
+    )
+
+    table = Table(show_header=True, header_style="bold", padding=(0, 1))
+    table.add_column("Project", style="bold")
+    table.add_column("Status")
+    table.add_column("Exit", justify="right")
+    table.add_column("Duration", justify="right")
+    table.add_column("Details")
+
+    for row in result.get("results", []):
+        s = row.get("status", "?")
+        if s == "completed":
+            s_display = "[green]completed[/green]"
+        elif s == "failed":
+            s_display = "[red]failed[/red]"
+        elif s in ("error", "timeout"):
+            s_display = f"[red]{s}[/red]"
+        elif s == "skipped":
+            s_display = "[yellow]skipped[/yellow]"
+        elif s == "parse_error":
+            s_display = "[yellow]parse_error[/yellow]"
+        else:
+            s_display = s
+
+        exit_code = row.get("exit_code")
+        exit_str = "" if exit_code is None else str(exit_code)
+        dur = f"{row.get('duration_ms', 0)}ms"
+        details = row.get("error", "")
+        if len(details) > 60:
+            details = details[:57] + "..."
+
+        table.add_row(row.get("project", "?"), s_display, exit_str, dur, details)
+
+    console.print(table)
+
+    summary = result.get("summary", {})
+    total = summary.get("total", 0)
+    parts = [f"{summary.get('completed', 0)}/{total} succeeded"]
+    if summary.get("failed"):
+        parts.append(f"{summary['failed']} failed")
+    if summary.get("skipped"):
+        parts.append(f"{summary['skipped']} skipped")
+    console.print(f"\n{', '.join(parts)}\n")
+
+
 def print_history(runs: list[dict[str, Any]], console: Console) -> None:
     """Print run history as a human-readable table."""
     if not runs:

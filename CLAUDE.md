@@ -29,6 +29,14 @@ conductor list [--json]        # Show registered CLIs
 conductor run <workflow>       # Run a named workflow
 conductor run --inline <yaml>  # Run inline YAML
 conductor exec <project> <cmd> # Run single command with wrapping
+conductor sweep <command>      # Fan one subcommand across the registry
+                  [--filter has-command|has-cli|all]
+                  [--parallel N] [--fail-fast]
+                  [--continue-on-error/--no-continue-on-error]
+                              # Cross-project composition primitive.
+                              # Pairs registry + executor + history. Use `--`
+                              # to forward flags verbatim:
+                              #   conductor sweep -- doctor --json
 conductor workflows [--json]   # List available workflows
 conductor validate <workflow>  # Validate without running
 conductor doctor [--json] [--project NAME] [--check-json]
@@ -89,3 +97,9 @@ When running in a Claude Code session, conductor is a **data-gathering tool**. T
 1. Run `conductor run <workflow> --json` to collect structured data
 2. Synthesize the JSON output into insights, summaries, or actions
 3. Never modify workflows without user approval
+
+For "one command, every project" surveys, reach for `conductor sweep` — it
+is the cross-project composition primitive. Example: `conductor sweep --
+doctor --json --filter has-command --json` collects each project's doctor
+report into a single merged envelope. Workflows still own multi-step chained
+pipelines; sweep owns the "one command, many projects" axis.

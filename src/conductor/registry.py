@@ -183,17 +183,27 @@ def _parse_command_count(help_text: str) -> int:
     0 when no Commands section is found; caps at _MAX_COMMANDS to avoid poisoning
     the registry with runaway parser output.
     """
+    return len(_parse_command_names(help_text))
+
+
+def _parse_command_names(help_text: str) -> list[str]:
+    """Parse a Typer/Click `--help` capture and return subcommand names in order.
+
+    Companion to `_parse_command_count`; same parsing rules and cap behavior.
+    Returns ``[]`` when no Commands section is found or when the parser would
+    exceed `_MAX_COMMANDS` (runaway output protection).
+    """
     lines = help_text.split("\n")
-    count = _count_rich_box(lines)
-    if count == 0:
-        count = _count_plain_click(lines)
-    if count > _MAX_COMMANDS:
-        return 0
-    return count
+    names = _names_rich_box(lines)
+    if not names:
+        names = _names_plain_click(lines)
+    if len(names) > _MAX_COMMANDS:
+        return []
+    return names
 
 
-def _count_rich_box(lines: list[str]) -> int:
-    count = 0
+def _names_rich_box(lines: list[str]) -> list[str]:
+    names: list[str] = []
     i = 0
     while i < len(lines):
         if _RICH_COMMANDS_HEADER.match(lines[i]):
@@ -204,7 +214,6 @@ def _count_rich_box(lines: list[str]) -> int:
                 if not stripped:
                     i += 1
                     continue
-                # Box close: starts with ╰ or ╯ (possibly after stripping leading dashes)
                 if stripped[0] in "╰╯" or _RICH_BOX_END.match(line):
                     break
                 if stripped.startswith("│"):
@@ -212,15 +221,15 @@ def _count_rich_box(lines: list[str]) -> int:
                     if inner:
                         name = inner.split()[0]
                         if name.replace("-", "_").replace(":", "_").isidentifier() or _looks_like_command(name):
-                            count += 1
+                            names.append(name)
                 i += 1
-            return count
+            return names
         i += 1
-    return count
+    return names
 
 
-def _count_plain_click(lines: list[str]) -> int:
-    count = 0
+def _names_plain_click(lines: list[str]) -> list[str]:
+    names: list[str] = []
     in_commands = False
     for line in lines:
         if _PLAIN_COMMANDS_HEADER.match(line):
@@ -228,17 +237,15 @@ def _count_plain_click(lines: list[str]) -> int:
             continue
         if in_commands:
             if not line.strip():
-                # Blank line ends the section
                 break
             if not line[0].isspace():
-                # Non-indented line ends the section
                 break
             parts = line.strip().split()
             if parts:
                 name = parts[0]
                 if _looks_like_command(name):
-                    count += 1
-    return count
+                    names.append(name)
+    return names
 
 
 def _looks_like_command(token: str) -> bool:
@@ -254,6 +261,41 @@ def _count_commands(project_dir: Path, cli_cmd: str) -> int:
     if help_text is None:
         return 0
     return _parse_command_count(help_text)
+
+
+def list_project_commands(project: dict[str, Any]) -> list[str]:
+    """Return the subcommand names exposed by a registered project's CLI.
+
+    Captures the CLI's top-level ``--help`` and parses the Commands section.
+    Returns ``[]`` when the CLI cannot be resolved, when ``--help`` fails, or
+    when the parser cannot find a Commands section. Used by ``conductor sweep``
+    to decide whether a project exposes the head subcommand being fanned out.
+    """
+    try:
+        cmd_parts, cwd = get_cli_command(project)
+    except Exception:
+        return []
+    if not cmd_parts:
+        return []
+    try:
+        result = subprocess.run(
+            cmd_parts + ["--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(cwd),
+            env={**os.environ, **_HELP_ENV},
+        )
+    except (
+        subprocess.TimeoutExpired,
+        subprocess.SubprocessError,
+        FileNotFoundError,
+        OSError,
+    ):
+        return []
+    if result.returncode != 0:
+        return []
+    return _parse_command_names(result.stdout)
 
 
 def load_registry() -> dict[str, dict[str, Any]]:
