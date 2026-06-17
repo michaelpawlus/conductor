@@ -118,12 +118,18 @@ def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
 
 
 def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
-    """Read run records from the JSONL outbox, newest last.
+    """Read run records from the JSONL outbox, ordered oldest to newest by id.
 
     Returns an empty list if the outbox does not exist yet. ``limit`` keeps only
     the most recent N records (the tail), which is what a synthesis reader
     typically wants; ``limit=0`` returns no records (matching ``get_history(0)``),
     and ``None`` returns everything.
+
+    Records are sorted by run id rather than trusting file order: the append
+    happens after the SQLite commit and outside any lock, so concurrent runs can
+    land their lines out of id-order. Sorting by id (the monotonic source of
+    truth) makes the tail genuinely the most recent runs regardless of write
+    interleaving.
     """
     path = _outbox_path()
     if not path.exists():
@@ -134,6 +140,7 @@ def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
             line = line.strip()
             if line:
                 records.append(json.loads(line))
+    records.sort(key=lambda r: r["id"])
     if limit is not None:
         if limit <= 0:
             return []

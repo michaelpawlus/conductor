@@ -114,3 +114,18 @@ class TestReadOutbox:
         # limit=0 means "no records", consistent with get_history(0) — not the
         # whole list (which records[-0:] would have returned).
         assert hist_mod.read_outbox(limit=0) == []
+
+    def test_orders_by_id_not_file_order(self, isolated_history):
+        # Concurrent runs can append out of order (a lower-id run preempted
+        # until after a higher-id one). read_outbox sorts by id so the tail is
+        # genuinely the most recent run, not whatever line landed last.
+        outbox = isolated_history["outbox"]
+        outbox.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            json.dumps({"id": 2, "workflow": "second", "result": {"id": 2}}),
+            json.dumps({"id": 1, "workflow": "first", "result": {"id": 1}}),
+        ]
+        outbox.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        assert [r["workflow"] for r in hist_mod.read_outbox()] == ["first", "second"]
+        assert [r["workflow"] for r in hist_mod.read_outbox(limit=1)] == ["second"]
