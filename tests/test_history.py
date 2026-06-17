@@ -129,6 +129,20 @@ class TestReadOutbox:
 
         assert [r["workflow"] for r in hist_mod.read_outbox()] == ["first", "second"]
 
+    def test_append_after_corrupt_tail_keeps_next_run(self, isolated_history):
+        # A prior writer killed mid-append left an unterminated fragment (no
+        # trailing newline). The next append must not merge onto it — otherwise
+        # the combined line is skipped and the next committed run vanishes from
+        # the outbox. The writer prepends a separator so only the fragment is
+        # lost.
+        outbox = isolated_history["outbox"]
+        outbox.parent.mkdir(parents=True, exist_ok=True)
+        outbox.write_text('{"id": 1, "workflow": "frag', encoding="utf-8")
+
+        hist_mod.record_run(_run(workflow="next"))
+
+        assert [r["workflow"] for r in hist_mod.read_outbox()] == ["next"]
+
     def test_orders_by_id_not_file_order(self, isolated_history):
         # Concurrent runs can append out of order (a lower-id run preempted
         # until after a higher-id one). read_outbox sorts by id so the tail is

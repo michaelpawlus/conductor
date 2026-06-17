@@ -16,6 +16,7 @@ raised), but a lagging run is still durably recorded in ``history.db``.
 
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,22 @@ def record_run(result: dict[str, Any]) -> int:
     return run_id
 
 
+def _ends_without_newline(path: Path) -> bool:
+    """True if the file exists, is non-empty, and its last byte is not ``\\n``.
+
+    This only happens when a previous writer was killed mid-append and left an
+    unterminated fragment; a live writer always finishes its line with ``\\n``.
+    """
+    try:
+        if path.stat().st_size == 0:
+            return False
+    except OSError:
+        return False
+    with path.open("rb") as f:
+        f.seek(-1, os.SEEK_END)
+        return f.read(1) != b"\n"
+
+
 def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
     """Append one run to the JSONL outbox as a single line.
 
@@ -108,6 +125,13 @@ def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
     different process appended in the meantime. Instead, :func:`read_outbox`
     tolerates a malformed trailing fragment by skipping it — and any run that
     fails to reach the outbox is still durably in ``history.db``.
+
+    If the file ends with an unterminated fragment (a prior writer killed
+    mid-append), we prepend a newline so this record lands on its own line
+    rather than being merged into — and skipped along with — that bad tail.
+    The fragment is then isolated on its own line and skipped by itself, so a
+    corrupt tail costs at most the one interrupted run, never the next good
+    one. A spurious blank line is harmless: ``read_outbox`` skips empties.
     """
     record = {
         "id": run_id,
@@ -120,8 +144,9 @@ def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
     }
     path = _outbox_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "\n" if _ends_without_newline(path) else ""
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+        f.write(prefix + json.dumps(record) + "\n")
 
 
 def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
