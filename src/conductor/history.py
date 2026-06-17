@@ -111,10 +111,25 @@ def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
         "duration_seconds": result.get("duration_seconds"),
         "result": result,
     }
+    line = json.dumps(record) + "\n"
     path = _outbox_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    # Record the last known-good boundary so a partial write (disk full, quota,
+    # IO error) can be rolled back rather than leaving a truncated JSON fragment
+    # that would corrupt the stream for readers.
+    start = path.stat().st_size if path.exists() else 0
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+    except Exception:
+        try:
+            if path.exists():
+                with path.open("r+", encoding="utf-8") as f:
+                    f.truncate(start)
+        except OSError:
+            pass
+        raise
 
 
 def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
@@ -130,6 +145,10 @@ def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
     land their lines out of id-order. Sorting by id (the monotonic source of
     truth) makes the tail genuinely the most recent runs regardless of write
     interleaving.
+
+    Malformed lines are skipped (and logged) rather than raised: a process
+    killed mid-append can leave a truncated fragment that no writer-side handler
+    got to clean up, and one bad line must not break every read.
     """
     path = _outbox_path()
     if not path.exists():
@@ -138,8 +157,14 @@ def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 records.append(json.loads(line))
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Skipping malformed line in outbox %s: %r", path, line[:120]
+                )
     records.sort(key=lambda r: r["id"])
     if limit is not None:
         if limit <= 0:
