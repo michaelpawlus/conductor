@@ -64,7 +64,10 @@ All commands support `--json`. Human output goes to stderr, JSON to stdout.
 
 - `~/.conductor/registry.yml` — discovered project registry
 - `~/.conductor/workflows/` — user workflow definitions (override built-ins)
-- `~/.conductor/history.db` — SQLite run history
+- `~/.conductor/history.db` — SQLite run history (queryable, backs `conductor history`)
+- `~/.conductor/runs.jsonl` — append-only JSONL outbox; one run envelope per line.
+  Agent- and Obsidian-friendly handoff stream. Conductor emits it; downstream
+  readers (a Claude Code session or scheduled trigger) synthesize it.
 
 ## Development
 
