@@ -71,18 +71,21 @@ class TestOutbox:
         from_outbox = hist_mod.read_outbox()[-1]["result"]
         assert from_db == from_outbox
 
-    def test_outbox_failure_rolls_back_sqlite(self, isolated_history, monkeypatch):
-        # If the outbox append fails, neither store should retain the run, so
-        # SQLite/outbox parity holds rather than leaving an orphan DB row.
+    def test_outbox_failure_keeps_sqlite_row(self, isolated_history, monkeypatch):
+        # SQLite leads: a failed outbox append must not lose the committed run
+        # and must not raise (history is best-effort for callers). The outbox
+        # simply lags — it never gets ahead with an orphan/reusable id.
         def boom(*args, **kwargs):
             raise OSError("outbox unwritable")
 
         monkeypatch.setattr(hist_mod, "_append_outbox", boom)
 
-        with pytest.raises(OSError):
-            hist_mod.record_run(_run(workflow="doomed"))
+        run_id = hist_mod.record_run(_run(workflow="kept"))
 
-        assert hist_mod.get_history() == []
+        # Durably recorded in SQLite...
+        assert hist_mod.get_run(run_id) is not None
+        assert [r["workflow"] for r in hist_mod.get_history()] == ["kept"]
+        # ...with no outbox line ahead of it.
         assert hist_mod.read_outbox() == []
 
 

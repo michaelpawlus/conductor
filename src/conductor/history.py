@@ -1,18 +1,26 @@
 """SQLite-backed workflow run history.
 
-SQLite (``history.db``) is the queryable store behind ``conductor history``.
-Alongside it, every run is also appended to an append-only JSONL *outbox*
-(``runs.jsonl``) in the same directory. The outbox is the agent- and
-Obsidian-friendly handoff surface: conductor stays a data-gathering tool that
-emits one JSON object per line, and downstream readers (a Claude Code session
-or a scheduled trigger) consume the stream and synthesize it. The outbox does
-not replace SQLite — both are written from the same :func:`record_run`.
+SQLite (``history.db``) is the queryable store behind ``conductor history`` and
+the source of truth. Alongside it, every run is also appended to an append-only
+JSONL *outbox* (``runs.jsonl``) in the same directory. The outbox is the agent-
+and Obsidian-friendly handoff surface: conductor stays a data-gathering tool
+that emits one JSON object per line, and downstream readers (a Claude Code
+session or a scheduled trigger) consume the stream and synthesize it.
+
+The two stores can't be written truly atomically, so SQLite leads: a run is
+committed there first, then mirrored to the outbox best-effort. That guarantees
+the outbox is never *ahead* of SQLite — every outbox id resolves via
+``conductor history``. The outbox may lag (a failed append is logged, not
+raised), but a lagging run is still durably recorded in ``history.db``.
 """
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path.home() / ".conductor" / "history.db"
 
@@ -48,12 +56,12 @@ def _get_conn() -> sqlite3.Connection:
 def record_run(result: dict[str, Any]) -> int:
     """Record a workflow run. Returns the row ID.
 
-    Writes to both stores — the SQLite ``runs`` table and the JSONL outbox —
-    atomically: the outbox line is appended while the SQLite row is still
-    uncommitted, and the row is only committed once the append succeeds. If the
-    append fails the insert is rolled back, so the two stores never drift out of
-    parity (callers swallow the raised error, so a failed run is simply absent
-    from both stores rather than orphaned in one).
+    SQLite is the source of truth: the row is committed first, then mirrored to
+    the JSONL outbox best-effort. This keeps the outbox from ever getting
+    *ahead* of SQLite — it can only lag, and a lagging run is still durably in
+    ``history.db`` (and thus backfillable). A failed append is logged rather
+    than raised, so it can neither roll back an already-durable run nor surface
+    an outbox id that ``conductor history`` cannot resolve.
     """
     conn = _get_conn()
     try:
@@ -70,17 +78,21 @@ def record_run(result: dict[str, Any]) -> int:
                 json.dumps(result),
             ),
         )
-        # lastrowid is assigned by execute(), before commit, so the outbox line
-        # can carry the final row id while the row itself is still pending.
-        run_id: int = cursor.lastrowid  # type: ignore[assignment]
-        _append_outbox(run_id, result)
         conn.commit()
-        return run_id
-    except Exception:
-        conn.rollback()
-        raise
+        run_id: int = cursor.lastrowid  # type: ignore[assignment]
     finally:
         conn.close()
+
+    try:
+        _append_outbox(run_id, result)
+    except Exception:
+        logger.warning(
+            "Run %s committed to history.db but outbox append failed; "
+            "run is still queryable via `conductor history`.",
+            run_id,
+            exc_info=True,
+        )
+    return run_id
 
 
 def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
