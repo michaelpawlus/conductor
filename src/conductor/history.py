@@ -1,4 +1,13 @@
-"""SQLite-backed workflow run history."""
+"""SQLite-backed workflow run history.
+
+SQLite (``history.db``) is the queryable store behind ``conductor history``.
+Alongside it, every run is also appended to an append-only JSONL *outbox*
+(``runs.jsonl``) in the same directory. The outbox is the agent- and
+Obsidian-friendly handoff surface: conductor stays a data-gathering tool that
+emits one JSON object per line, and downstream readers (a Claude Code session
+or a scheduled trigger) consume the stream and synthesize it. The outbox does
+not replace SQLite — both are written from the same :func:`record_run`.
+"""
 
 import json
 import sqlite3
@@ -6,6 +15,15 @@ from pathlib import Path
 from typing import Any
 
 DB_PATH = Path.home() / ".conductor" / "history.db"
+
+
+def _outbox_path() -> Path:
+    """The JSONL outbox lives beside the history DB.
+
+    Derived from ``DB_PATH`` at call time so redirecting the DB (e.g. in tests)
+    keeps the outbox colocated automatically.
+    """
+    return DB_PATH.parent / "runs.jsonl"
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -28,7 +46,10 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def record_run(result: dict[str, Any]) -> int:
-    """Record a workflow run. Returns the row ID."""
+    """Record a workflow run. Returns the row ID.
+
+    Writes to both stores: the SQLite ``runs`` table and the JSONL outbox.
+    """
     conn = _get_conn()
     try:
         cursor = conn.execute(
@@ -45,9 +66,55 @@ def record_run(result: dict[str, Any]) -> int:
             ),
         )
         conn.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+        run_id: int = cursor.lastrowid  # type: ignore[assignment]
     finally:
         conn.close()
+
+    _append_outbox(run_id, result)
+    return run_id
+
+
+def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
+    """Append one run to the JSONL outbox as a single line.
+
+    Each line carries the run's identity at top level (so readers can skim
+    without parsing ``result``) plus the full envelope under ``result``. The
+    SQLite row id ties the line back to ``conductor history``.
+    """
+    record = {
+        "id": run_id,
+        "workflow": result["workflow"],
+        "status": result["status"],
+        "started_at": result["started_at"],
+        "completed_at": result.get("completed_at"),
+        "duration_seconds": result.get("duration_seconds"),
+        "result": result,
+    }
+    path = _outbox_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
+    """Read run records from the JSONL outbox, newest last.
+
+    Returns an empty list if the outbox does not exist yet. ``limit`` keeps only
+    the most recent N records (the tail), which is what a synthesis reader
+    typically wants.
+    """
+    path = _outbox_path()
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    if limit is not None:
+        return records[-limit:]
+    return records
 
 
 def get_history(limit: int = 20) -> list[dict[str, Any]]:
