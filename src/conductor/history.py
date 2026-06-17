@@ -101,7 +101,8 @@ def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
 
     Returns an empty list if the outbox does not exist yet. ``limit`` keeps only
     the most recent N records (the tail), which is what a synthesis reader
-    typically wants.
+    typically wants; ``limit=0`` returns no records (matching ``get_history(0)``),
+    and ``None`` returns everything.
     """
     path = _outbox_path()
     if not path.exists():
@@ -113,6 +114,8 @@ def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:
             if line:
                 records.append(json.loads(line))
     if limit is not None:
+        if limit <= 0:
+            return []
         return records[-limit:]
     return records
 

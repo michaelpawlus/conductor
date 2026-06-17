@@ -89,3 +89,11 @@ class TestReadOutbox:
 
         records = hist_mod.read_outbox(limit=2)
         assert [r["workflow"] for r in records] == ["two", "three"]
+
+    def test_limit_zero_returns_nothing(self, isolated_history):
+        for name in ("one", "two", "three"):
+            hist_mod.record_run(_run(workflow=name))
+
+        # limit=0 means "no records", consistent with get_history(0) — not the
+        # whole list (which records[-0:] would have returned).
+        assert hist_mod.read_outbox(limit=0) == []
