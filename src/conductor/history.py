@@ -48,7 +48,12 @@ def _get_conn() -> sqlite3.Connection:
 def record_run(result: dict[str, Any]) -> int:
     """Record a workflow run. Returns the row ID.
 
-    Writes to both stores: the SQLite ``runs`` table and the JSONL outbox.
+    Writes to both stores — the SQLite ``runs`` table and the JSONL outbox —
+    atomically: the outbox line is appended while the SQLite row is still
+    uncommitted, and the row is only committed once the append succeeds. If the
+    append fails the insert is rolled back, so the two stores never drift out of
+    parity (callers swallow the raised error, so a failed run is simply absent
+    from both stores rather than orphaned in one).
     """
     conn = _get_conn()
     try:
@@ -65,13 +70,17 @@ def record_run(result: dict[str, Any]) -> int:
                 json.dumps(result),
             ),
         )
-        conn.commit()
+        # lastrowid is assigned by execute(), before commit, so the outbox line
+        # can carry the final row id while the row itself is still pending.
         run_id: int = cursor.lastrowid  # type: ignore[assignment]
+        _append_outbox(run_id, result)
+        conn.commit()
+        return run_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-
-    _append_outbox(run_id, result)
-    return run_id
 
 
 def _append_outbox(run_id: int, result: dict[str, Any]) -> None:

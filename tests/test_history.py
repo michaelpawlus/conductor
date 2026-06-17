@@ -71,6 +71,20 @@ class TestOutbox:
         from_outbox = hist_mod.read_outbox()[-1]["result"]
         assert from_db == from_outbox
 
+    def test_outbox_failure_rolls_back_sqlite(self, isolated_history, monkeypatch):
+        # If the outbox append fails, neither store should retain the run, so
+        # SQLite/outbox parity holds rather than leaving an orphan DB row.
+        def boom(*args, **kwargs):
+            raise OSError("outbox unwritable")
+
+        monkeypatch.setattr(hist_mod, "_append_outbox", boom)
+
+        with pytest.raises(OSError):
+            hist_mod.record_run(_run(workflow="doomed"))
+
+        assert hist_mod.get_history() == []
+        assert hist_mod.read_outbox() == []
+
 
 class TestReadOutbox:
     def test_returns_empty_when_no_outbox(self, isolated_history):
