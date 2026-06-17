@@ -101,6 +101,13 @@ def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
     Each line carries the run's identity at top level (so readers can skim
     without parsing ``result``) plus the full envelope under ``result``. The
     SQLite row id ties the line back to ``conductor history``.
+
+    The append is plain and lock-free. We deliberately do *not* truncate on a
+    failed/partial write: multiple conductor processes can append to the same
+    file concurrently, and rewinding to a pre-write offset could drop a line a
+    different process appended in the meantime. Instead, :func:`read_outbox`
+    tolerates a malformed trailing fragment by skipping it — and any run that
+    fails to reach the outbox is still durably in ``history.db``.
     """
     record = {
         "id": run_id,
@@ -111,25 +118,10 @@ def _append_outbox(run_id: int, result: dict[str, Any]) -> None:
         "duration_seconds": result.get("duration_seconds"),
         "result": result,
     }
-    line = json.dumps(record) + "\n"
     path = _outbox_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Record the last known-good boundary so a partial write (disk full, quota,
-    # IO error) can be rolled back rather than leaving a truncated JSON fragment
-    # that would corrupt the stream for readers.
-    start = path.stat().st_size if path.exists() else 0
-    try:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line)
-            f.flush()
-    except Exception:
-        try:
-            if path.exists():
-                with path.open("r+", encoding="utf-8") as f:
-                    f.truncate(start)
-        except OSError:
-            pass
-        raise
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 def read_outbox(limit: int | None = None) -> list[dict[str, Any]]:

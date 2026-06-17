@@ -1,7 +1,6 @@
 """Tests for the run history store and its JSONL outbox."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -71,47 +70,6 @@ class TestOutbox:
         from_db = hist_mod.get_run(run_id)
         from_outbox = hist_mod.read_outbox()[-1]["result"]
         assert from_db == from_outbox
-
-    def test_partial_append_is_rolled_back(self, isolated_history, monkeypatch):
-        # If the filesystem accepts only part of a line and then raises, the
-        # truncated fragment must be rolled back so the stream stays parseable.
-        hist_mod.record_run(_run(workflow="good"))
-        outbox = isolated_history["outbox"]
-        baseline = outbox.read_bytes()
-
-        real_open = Path.open
-
-        class PartialWriter:
-            def __init__(self, fh):
-                self._fh = fh
-
-            def write(self, data):
-                self._fh.write(data[: max(1, len(data) // 2)])  # partial line
-                raise OSError("disk full")
-
-            def __getattr__(self, name):
-                return getattr(self._fh, name)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return self._fh.__exit__(*exc)
-
-        def fake_open(self, mode="r", *args, **kwargs):
-            fh = real_open(self, mode, *args, **kwargs)
-            return PartialWriter(fh) if "a" in mode else fh
-
-        # Scope the Path.open patch so it's restored without undoing the
-        # fixture's DB_PATH redirection.
-        with monkeypatch.context() as m:
-            m.setattr(Path, "open", fake_open)
-            with pytest.raises(OSError):
-                hist_mod._append_outbox(99, _run(workflow="doomed"))
-
-        # Fragment truncated away: byte-identical to before, still fully readable.
-        assert outbox.read_bytes() == baseline
-        assert [r["workflow"] for r in hist_mod.read_outbox()] == ["good"]
 
     def test_outbox_failure_keeps_sqlite_row(self, isolated_history, monkeypatch):
         # SQLite leads: a failed outbox append must not lose the committed run
